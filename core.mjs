@@ -16,7 +16,7 @@ export function filterPapers(papers, state = {}, ignoreYear = false) {
   const query = clean(state.q).toLocaleLowerCase();
   return papers.filter(p => {
     if (!ignoreYear && state.years?.length && !state.years.includes(Number(p.year))) return false;
-    if (query && ![p.id, p.title, p.abstract, ...(p.authors || []).map(a => a.name), ...valuesFor(p, 'institutions')].join(' ').toLocaleLowerCase().includes(query)) return false;
+    if (query && ![p.id, p.title, p.abstract, p._search_text, ...(p.authors || []).map(a => a.name), ...valuesFor(p, 'institutions')].join(' ').toLocaleLowerCase().includes(query)) return false;
     return DIMENSIONS.every(d => {
       const selected = state[d] || [];
       if (!selected.length) return true;
@@ -123,30 +123,32 @@ export function rankGraph(graph, mode = 'pagerank', damping = .85) {
   ranking.sort((a,b)=>(b[mode] ?? b.pagerank)-(a[mode] ?? a.pagerank) || (a.id<b.id?-1:a.id>b.id?1:0));
   return {ranking, diagnostics:pr};
 }
-export function rankingCSV(result, context = {}) {
+export function rankingCSV(result, context = {}, options = {}) {
   const fields=['rank','author_id','name','identity_status','papers','degree','weighteddegree','pagerank','metric','edge_weighting','damping','filter_query','n_nodes','n_edges','dataset_version'];
   const rows=result.ranking.map((n,i)=>[i+1,n.id,n.label,n.resolved?'resolved':'unresolved',n.papers,n.degree,n.weighteddegree,n.pagerank,context.metric||'pagerank',context.weighting||'',result.diagnostics.damping,context.filter_query||'',result.ranking.length,context.edges??'',context.version||'']);
-  return '\ufeff'+[fields,...rows].map(r=>r.map(v=>csvQuote(v)).join(',')).join('\r\n');
+  return '\ufeff'+[fields.map(f=>options.headerLabel?options.headerLabel(f):f),...rows.map(row=>row.map((v,i)=>options.cellValue?options.cellValue(v,fields[i]):v))].map(r=>r.map(v=>csvQuote(v)).join(',')).join('\r\n');
 }
 export function csvQuote(value) {
   let v=String(value??'');
   if (typeof value==='string' && /^[\s]*[=+@\-]/.test(v)) v="'"+v;
   return '"'+v.replace(/"/g,'""')+'"';
 }
-export function toCSV(papers) {
+export function toCSV(papers, options = {}) {
   const fields = ['id','year','title','authors','institutions','topics','methods','theories','study_stage','stage_evidence_level','stage_confidence','stage_conflict','evidence_level','review_status','source_id','page_start','page_end'];
   const quote = csvQuote;
   const rows = papers.map(p => fields.map(f => {
-    if (f === 'authors') return quote((p.authors || []).map(a => a.name).join(' | '));
-    if (['institutions','topics','methods','theories'].includes(f)) return quote(valuesFor(p,f).join(' | '));
-    if (f==='study_stage')return quote(valuesFor(p,f)[0]);
-    if (f==='stage_conflict' && p[f] && typeof p[f]==='object')return quote(Array.isArray(p[f])?p[f].join(' | '):JSON.stringify(p[f]));
-    return quote(p[f]);
+    let value=p[f];
+    if(f==='authors')value=(p.authors||[]).map(a=>a.name).join(' | ');
+    if(['institutions','topics','methods','theories'].includes(f))value=valuesFor(p,f).join(' | ');
+    if(f==='study_stage')value=valuesFor(p,f)[0];
+    if(f==='stage_conflict'&&p[f]&&typeof p[f]==='object')value=Array.isArray(p[f])?p[f].join(' | '):JSON.stringify(p[f]);
+    return quote(options.cellValue?options.cellValue(value,f):value);
   }).join(','));
-  return '\ufeff' + [fields.map(quote).join(','), ...rows].join('\r\n');
+  return '\ufeff' + [fields.map(f=>quote(options.headerLabel?options.headerLabel(f):f)).join(','), ...rows].join('\r\n');
 }
 export function stateToQuery(state) {
   const q = new URLSearchParams();
+  if(['en','zh'].includes(state.lang))q.set('lang',state.lang);
   if (clean(state.q)) q.set('q', clean(state.q));
   for (const d of ['years',...DIMENSIONS]) for (const value of [...(state[d] || [])].sort()) q.append(d, value);
   if (state.mode === 'share') q.set('mode','share');
@@ -156,6 +158,7 @@ export function stateToQuery(state) {
 }
 export function queryToState(search, papers, years) {
   const query = new URLSearchParams(search), state = {q: query.get('q') || '', mode: query.get('mode') === 'share' ? 'share' : 'count'};
+  if(['en','zh'].includes(query.get('lang')))state.lang=query.get('lang');
   state.years = unique(query.getAll('years').map(Number).filter(y => years.includes(y)));
   for (const dimension of DIMENSIONS) {
     const allowed = optionsFor(papers, dimension);
